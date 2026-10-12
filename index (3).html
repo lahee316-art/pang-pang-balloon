@@ -1,0 +1,766 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>팡팡 풍선</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jua&display=swap" rel="stylesheet">
+<style>
+/* Layout: one full-screen canvas stage. Caregiver controls sit behind a long-press gear so infants cannot open them by accident. */
+:root{
+  --sky-top:#CFE8FA;
+  --sky-bottom:#FDE7EF;
+  --ink:#4A4660;
+  --card:rgba(255,255,255,.94);
+  --pink:#FFB3C7;
+  --sky:#A9D8F5;
+  --mint:#B8EBD0;
+  --off:#E6E3EE;
+  --focus:#7E6BC4;
+  --font:'Jua','Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',sans-serif;
+  color-scheme: light;
+}
+html,body{height:100%;margin:0}
+body{
+  background:linear-gradient(var(--sky-top),var(--sky-bottom));
+  color:var(--ink);
+  font-family:var(--font);
+  overflow:hidden;
+  touch-action:none;
+  -webkit-user-select:none;user-select:none;
+  -webkit-tap-highlight-color:transparent;
+  overscroll-behavior:none;
+}
+[hidden]{display:none!important}
+#stage{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+#cam{position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none}
+
+.overlay{
+  position:fixed;inset:0;display:grid;place-items:center;
+  padding:16px;box-sizing:border-box;overflow-y:auto;
+  background:rgba(255,255,255,.3);
+  -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+  touch-action:pan-y;
+}
+#panel{background:rgba(74,70,96,.28)}
+.card{
+  width:100%;max-width:440px;box-sizing:border-box;
+  background:var(--card);border-radius:28px;padding:28px 24px;
+  box-shadow:0 18px 50px rgba(74,70,96,.18);
+  display:flex;flex-direction:column;gap:18px;
+}
+h1{margin:0;font-size:2.8rem;font-weight:400;text-align:center;text-wrap:balance;letter-spacing:.02em}
+h2{margin:0;font-size:1.7rem;font-weight:400;text-align:center}
+.lead{margin:0;text-align:center;font-size:1.25rem}
+.stack{display:flex;flex-direction:column;gap:12px}
+.btn,.toggle,.stepper button{
+  font:inherit;color:var(--ink);border:0;cursor:pointer;
+  border-radius:999px;min-height:56px;padding:12px 26px;font-size:1.3rem;
+}
+.btn.primary{background:var(--pink)}
+.btn.alt{background:var(--sky)}
+.btn.plain{background:var(--off)}
+.btn:active,.toggle:active,.stepper button:active{transform:scale(.97)}
+button:focus-visible{outline:3px solid var(--focus);outline-offset:3px}
+.rows{display:flex;flex-direction:column;gap:10px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:56px}
+.row .label{display:flex;flex-direction:column;min-width:0}
+.row .label small{font-size:.9rem;opacity:.75}
+.toggle{min-width:96px;min-height:48px;padding:8px 18px;font-size:1.1rem}
+.toggle[aria-pressed="true"]{background:var(--mint)}
+.toggle[aria-pressed="false"]{background:var(--off)}
+.stepper{display:flex;align-items:center;gap:10px}
+.stepper button{width:48px;min-height:48px;padding:0;background:var(--sky);font-size:1.6rem;line-height:1}
+.stepper output{min-width:2ch;text-align:center;font-size:1.4rem;font-variant-numeric:tabular-nums}
+.fine{margin:0;font-size:.9rem;line-height:1.5;text-align:center;opacity:.8;text-wrap:balance}
+
+#gear{
+  position:fixed;
+  top:calc(env(safe-area-inset-top,0px) + 12px);
+  right:calc(env(safe-area-inset-right,0px) + 12px);
+  width:48px;height:48px;border:0;border-radius:50%;padding:0;
+  background:rgba(255,255,255,.7);color:var(--ink);
+  display:grid;place-items:center;cursor:pointer;
+  transition:transform .7s linear,background .2s;
+}
+#gear.holding{transform:rotate(180deg) scale(1.15);background:#fff}
+#gear svg{width:26px;height:26px}
+#chip{
+  position:fixed;
+  top:calc(env(safe-area-inset-top,0px) + 14px);
+  left:calc(env(safe-area-inset-left,0px) + 14px);
+  max-width:calc(100% - 100px);
+  padding:8px 16px;border-radius:999px;font-size:1.05rem;
+  background:rgba(255,255,255,.82);color:var(--ink);
+  pointer-events:none;
+}
+#toast{
+  position:fixed;left:50%;transform:translateX(-50%);
+  bottom:calc(env(safe-area-inset-bottom,0px) + 20px);
+  width:max-content;max-width:calc(100% - 32px);box-sizing:border-box;
+  padding:12px 20px;border-radius:20px;font-size:1.05rem;text-align:center;
+  background:rgba(255,255,255,.94);color:var(--ink);
+  box-shadow:0 8px 24px rgba(74,70,96,.15);
+  pointer-events:none;
+}
+@media (prefers-reduced-motion:reduce){
+  #gear{transition:none}
+}
+</style>
+</head>
+<body>
+<canvas id="stage" aria-label="풍선 놀이 화면"></canvas>
+<video id="cam" playsinline muted autoplay></video>
+<div id="chip" role="status" hidden></div>
+<button id="gear" type="button" aria-label="설정 열기 (길게 누르기)" hidden>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+</button>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+
+<section id="start" class="overlay">
+  <div class="card">
+    <h1>팡팡 풍선</h1>
+    <p class="lead">손을 뻗어 풍선을 터뜨려요</p>
+    <div class="stack">
+      <button class="btn primary" id="goCam" type="button">카메라로 놀기</button>
+      <button class="btn alt" id="goTouch" type="button">터치로 놀기</button>
+    </div>
+    <div class="rows">
+      <div class="row">
+        <span class="label">거울모드<small>내 손이 거울처럼 움직여요</small></span>
+        <button class="toggle" type="button" data-toggle="mirror" aria-pressed="true"></button>
+      </div>
+      <div class="row">
+        <span class="label">소리</span>
+        <button class="toggle" type="button" data-toggle="sound" aria-pressed="true"></button>
+      </div>
+    </div>
+    <p class="fine">카메라 영상은 이 기기 안에서만 쓰이고 저장하거나 보내지 않아요. 놀이 중 설정은 오른쪽 위 톱니바퀴를 길게 누르면 열려요.</p>
+  </div>
+</section>
+
+<section id="panel" class="overlay" hidden role="dialog" aria-modal="true" aria-label="설정">
+  <div class="card">
+    <h2>설정</h2>
+    <div class="rows">
+      <div class="row">
+        <span class="label">거울모드<small>내 손이 거울처럼 움직여요</small></span>
+        <button class="toggle" type="button" data-toggle="mirror" aria-pressed="true"></button>
+      </div>
+      <div class="row">
+        <span class="label">소리</span>
+        <button class="toggle" type="button" data-toggle="sound" aria-pressed="true"></button>
+      </div>
+      <div class="row">
+        <span class="label">풍선 개수</span>
+        <div class="stepper">
+          <button type="button" id="minus" aria-label="풍선 줄이기">&minus;</button>
+          <output id="countOut" aria-live="polite">6</output>
+          <button type="button" id="plus" aria-label="풍선 늘리기">+</button>
+        </div>
+      </div>
+    </div>
+    <div class="stack">
+      <button class="btn alt" id="camToggle" type="button">카메라 끄기</button>
+      <button class="btn plain" id="fsBtn" type="button">전체화면</button>
+      <button class="btn primary" id="closeBtn" type="button">놀이로 돌아가기</button>
+      <button class="btn plain" id="homeBtn" type="button">처음 화면으로</button>
+    </div>
+  </div>
+</section>
+
+<script>
+(() => {
+'use strict';
+
+const $ = s => document.querySelector(s);
+const canvas = $('#stage');
+const ctx = canvas.getContext('2d');
+const video = $('#cam');
+const gear = $('#gear');
+const chip = $('#chip');
+const toastEl = $('#toast');
+const startEl = $('#start');
+const panelEl = $('#panel');
+
+const HANDS_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/';
+const COLORS = ['#FFB3C7', '#FFCBA4', '#FFF1A8', '#B8EBD0', '#A9D8F5', '#D3C1F2'];
+const INK = '#4A4660';
+const FONT = "'Jua','Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',sans-serif";
+const CONN = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+const TIPS = [4, 8, 12, 16, 20];
+const WORDS = ['팡!', '팡!', '팡팡!', '뿅!'];
+const reduceMotion = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const state = { running: false, camOn: false, mirror: true, sound: true, count: 6 };
+let W = 0, H = 0, dpr = 1;
+let balloons = [], particles = [], rings = [], words = [], pending = [];
+let hands = [], handsStamp = 0, lastHandSeen = 0;
+let handsModel = null, handsReady = false, handsFailed = false, stream = null, pumpId = 0;
+let wakeLock = null;
+
+/* ---------- helpers ---------- */
+const hex2rgb = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+const mix = (h, toward, a) => {
+  const c = hex2rgb(h), d = hex2rgb(toward);
+  return 'rgb(' + c.map((v, i) => Math.round(v + (d[i] - v) * a)).join(',') + ')';
+};
+const rand = (a, b) => a + Math.random() * (b - a);
+
+function toast(msg, ms) {
+  toastEl.textContent = msg;
+  toastEl.hidden = false;
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => { toastEl.hidden = true; }, ms || 4500);
+}
+
+/* ---------- sizing ---------- */
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ---------- balloons ---------- */
+const baseR = () => Math.max(46, Math.min(150, Math.min(W, H) * 0.13));
+
+function paint(b, color) {
+  b.color = color;
+  b.light = mix(color, '#FFFFFF', 0.6);
+  b.deep = mix(color, INK, 0.16);
+}
+
+function spawn(initial) {
+  const r = baseR() * rand(0.85, 1.15);
+  const margin = r + 10;
+  const x0 = margin + Math.random() * Math.max(1, W - 2 * margin);
+  const y = initial ? H * 0.15 + Math.random() * H * 0.7 : H + r * 2.2 + Math.random() * r;
+  const b = { x: x0, x0, y, r, vy: rand(24, 46), amp: rand(10, 26) * (reduceMotion ? 0.4 : 1), ph: rand(0, 6.28), sp: rand(0.6, 1.4) };
+  paint(b, COLORS[(Math.random() * COLORS.length) | 0]);
+  balloons.push(b);
+}
+
+function recycle(b) {
+  b.r = baseR() * rand(0.85, 1.15);
+  const margin = b.r + 10;
+  b.x0 = margin + Math.random() * Math.max(1, W - 2 * margin);
+  b.y = H + b.r * 2.2;
+  paint(b, COLORS[(Math.random() * COLORS.length) | 0]);
+}
+
+function inside(b, px, py, pad) {
+  const dx = (px - b.x) / (b.r * 1.05 + pad);
+  const dy = (py - b.y) / (b.r * 1.22 + pad);
+  return dx * dx + dy * dy <= 1;
+}
+
+/* ---------- sound ---------- */
+let ac = null, master = null, lastPopSound = 0;
+function initAudio() {
+  if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+  try {
+    ac = new (window.AudioContext || window.webkitAudioContext)();
+    master = ac.createGain();
+    master.gain.value = 0.7;
+    master.connect(ac.destination);
+  } catch (e) { ac = null; }
+}
+function popSound() {
+  if (!state.sound || !ac) return;
+  const nowMs = performance.now();
+  if (nowMs - lastPopSound < 45) return;
+  lastPopSound = nowMs;
+  if (ac.state === 'suspended') ac.resume();
+  const t = ac.currentTime;
+  const len = Math.floor(ac.sampleRate * 0.09);
+  const buf = ac.createBuffer(1, len, ac.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+  const src = ac.createBufferSource();
+  src.buffer = buf;
+  const bp = ac.createBiquadFilter();
+  bp.type = 'bandpass'; bp.frequency.value = 1400; bp.Q.value = 0.7;
+  const g = ac.createGain();
+  g.gain.setValueAtTime(0.5, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+  src.connect(bp); bp.connect(g); g.connect(master);
+  src.start(t);
+
+  const o = ac.createOscillator();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(420, t);
+  o.frequency.exponentialRampToValueAtTime(140, t + 0.1);
+  const og = ac.createGain();
+  og.gain.setValueAtTime(0.28, t);
+  og.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+  o.connect(og); og.connect(master);
+  o.start(t); o.stop(t + 0.14);
+
+  const notes = [523.25, 587.33, 659.25, 783.99, 880];
+  const c = ac.createOscillator();
+  c.type = 'triangle';
+  c.frequency.value = notes[(Math.random() * notes.length) | 0];
+  const cg = ac.createGain();
+  cg.gain.setValueAtTime(0.0001, t + 0.02);
+  cg.gain.exponentialRampToValueAtTime(0.12, t + 0.04);
+  cg.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+  c.connect(cg); cg.connect(master);
+  c.start(t + 0.02); c.stop(t + 0.5);
+}
+
+/* ---------- pop ---------- */
+function pop(b) {
+  const i = balloons.indexOf(b);
+  if (i < 0) return;
+  balloons.splice(i, 1);
+  pending.push(performance.now() + 700);
+  const n = reduceMotion ? 8 : 22;
+  for (let k = 0; k < n; k++) {
+    const a = rand(0, Math.PI * 2), sp = rand(120, 380);
+    particles.push({
+      x: b.x, y: b.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 60,
+      s: rand(5, 11), rot: rand(0, 6.28), vr: rand(-6, 6), life: 1,
+      round: Math.random() < 0.5,
+      color: [b.color, b.light, '#FFFFFF'][(Math.random() * 3) | 0]
+    });
+  }
+  rings.push({ x: b.x, y: b.y, r: b.r * 0.6, max: b.r * 1.9, life: 1 });
+  words.push({ x: b.x, y: b.y, size: b.r * 0.85, text: WORDS[(Math.random() * WORDS.length) | 0], life: 1, color: b.deep });
+  popSound();
+}
+
+function tryPop(px, py, pad) {
+  for (let i = balloons.length - 1; i >= 0; i--) {
+    if (inside(balloons[i], px, py, pad)) { pop(balloons[i]); return true; }
+  }
+  return false;
+}
+
+/* ---------- update ---------- */
+function update(dt, t, nowMs) {
+  for (const b of balloons) {
+    b.y -= b.vy * dt;
+    b.x = b.x0 + Math.sin(t * b.sp + b.ph) * b.amp;
+    if (b.y < -b.r * 3) recycle(b);
+  }
+  for (let i = pending.length - 1; i >= 0; i--) {
+    if (nowMs >= pending[i]) { pending.splice(i, 1); spawn(false); }
+  }
+  const total = balloons.length + pending.length;
+  if (total < state.count) spawn(false);
+  else if (balloons.length > state.count) balloons.shift();
+  else if (total > state.count && pending.length) pending.pop();
+
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    p.vx *= 0.985; p.vy += 420 * dt;
+    p.rot += p.vr * dt;
+    p.life -= dt / 0.9;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+  for (let i = rings.length - 1; i >= 0; i--) {
+    const g = rings[i];
+    g.r += (g.max - g.r) * Math.min(1, dt * 9);
+    g.life -= dt / 0.45;
+    if (g.life <= 0) rings.splice(i, 1);
+  }
+  for (let i = words.length - 1; i >= 0; i--) {
+    const w = words[i];
+    w.life -= dt / 0.85;
+    w.y -= 46 * dt;
+    if (w.life <= 0) words.splice(i, 1);
+  }
+
+  if (state.running && hands.length && nowMs - handsStamp < 300) {
+    for (const h of hands) {
+      for (const p of h) tryPop(p.x, p.y, 8);
+    }
+  }
+}
+
+/* ---------- draw ---------- */
+const clouds = [
+  { x: .1, y: .15, s: 1, v: 12 }, { x: .55, y: .38, s: 1.4, v: 8 },
+  { x: .8, y: .62, s: .9, v: 15 }, { x: .3, y: .82, s: 1.2, v: 10 }
+];
+function circle(x, y, r) { ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, Math.PI * 2); }
+
+function drawBackground(t) {
+  const useVideo = state.camOn && video.readyState >= 2 && video.videoWidth > 0;
+  if (useVideo) {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const s = Math.max(W / vw, H / vh);
+    const ox = (W - vw * s) / 2, oy = (H - vh * s) / 2;
+    ctx.save();
+    if (state.mirror) { ctx.translate(W, 0); ctx.scale(-1, 1); }
+    ctx.drawImage(video, ox, oy, vw * s, vh * s);
+    ctx.restore();
+    ctx.fillStyle = 'rgba(255,255,255,.16)';
+    ctx.fillRect(0, 0, W, H);
+  } else {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#CFE8FA');
+    g.addColorStop(1, '#FDE7EF');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(255,255,255,.65)';
+    for (const c of clouds) {
+      const x = ((c.x * W + t * c.v) % (W + 320)) - 160;
+      ctx.beginPath();
+      circle(x, c.y * H, 28 * c.s);
+      circle(x + 34 * c.s, c.y * H - 12 * c.s, 36 * c.s);
+      circle(x + 72 * c.s, c.y * H, 30 * c.s);
+      circle(x + 34 * c.s, c.y * H + 10 * c.s, 30 * c.s);
+      ctx.fill();
+    }
+  }
+}
+
+function drawBalloon(b, t) {
+  const rx = b.r, ry = b.r * 1.18;
+  const x = b.x, y = b.y;
+  // string
+  const sy = y + ry + b.r * 0.12;
+  ctx.strokeStyle = 'rgba(74,70,96,.4)';
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x, sy);
+  const L = b.r * 1.7;
+  for (let i = 1; i <= 8; i++) {
+    ctx.lineTo(x + Math.sin(t * 2 + i * 0.9 + b.ph) * b.r * 0.014 * i * i * 0.35, sy + L * i / 8);
+  }
+  ctx.stroke();
+  // knot
+  ctx.fillStyle = b.deep;
+  ctx.beginPath();
+  ctx.moveTo(x, y + ry - 3);
+  ctx.lineTo(x - b.r * 0.11, y + ry + b.r * 0.15);
+  ctx.lineTo(x + b.r * 0.11, y + ry + b.r * 0.15);
+  ctx.closePath();
+  ctx.fill();
+  // body
+  const g = ctx.createRadialGradient(x - rx * 0.35, y - ry * 0.4, b.r * 0.1, x, y, ry * 1.1);
+  g.addColorStop(0, b.light);
+  g.addColorStop(1, b.color);
+  ctx.save();
+  ctx.shadowColor = 'rgba(74,70,96,.2)';
+  ctx.shadowBlur = 16;
+  ctx.shadowOffsetY = 6;
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(255,255,255,.75)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  // highlight
+  ctx.fillStyle = 'rgba(255,255,255,.65)';
+  ctx.beginPath();
+  ctx.ellipse(x - rx * 0.4, y - ry * 0.45, rx * 0.13, ry * 0.24, -0.5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawEffects() {
+  for (const g of rings) {
+    ctx.strokeStyle = 'rgba(255,255,255,' + Math.max(0, g.life).toFixed(3) + ')';
+    ctx.lineWidth = 7 * Math.max(0, g.life);
+    ctx.beginPath();
+    ctx.arc(g.x, g.y, g.r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  for (const p of particles) {
+    ctx.globalAlpha = Math.max(0, p.life);
+    ctx.fillStyle = p.color;
+    if (p.round) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.s * 0.6, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillRect(-p.s / 2, -p.s * 0.3, p.s, p.s * 0.6);
+      ctx.restore();
+    }
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  for (const w of words) {
+    const prog = 1 - w.life;
+    const sc = reduceMotion ? 1 : (prog < 0.25 ? 0.6 + prog * 2.4 : 1.2 - (prog - 0.25) * 0.27);
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, w.life * 1.6);
+    ctx.translate(w.x, w.y);
+    ctx.scale(sc, sc);
+    ctx.font = '400 ' + Math.round(w.size) + 'px ' + FONT;
+    ctx.lineWidth = Math.max(5, w.size * 0.12);
+    ctx.strokeStyle = w.color;
+    ctx.strokeText(w.text, 0, 0);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText(w.text, 0, 0);
+    ctx.restore();
+  }
+}
+
+function drawHands(nowMs) {
+  if (!hands.length || nowMs - handsStamp > 300) return;
+  ctx.lineCap = 'round';
+  for (const h of hands) {
+    ctx.strokeStyle = 'rgba(255,255,255,.7)';
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    for (const [a, b] of CONN) { ctx.moveTo(h[a].x, h[a].y); ctx.lineTo(h[b].x, h[b].y); }
+    ctx.stroke();
+    ctx.save();
+    ctx.shadowColor = 'rgba(255,179,199,.9)';
+    ctx.shadowBlur = 14;
+    ctx.fillStyle = 'rgba(255,255,255,.9)';
+    ctx.beginPath();
+    circle(h[9].x, h[9].y, 17);
+    for (const i of TIPS) circle(h[i].x, h[i].y, 11);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function draw(t, nowMs) {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawBackground(t);
+  for (const b of balloons) drawBalloon(b, t);
+  drawEffects();
+  drawHands(nowMs);
+}
+
+/* ---------- main loop ---------- */
+let last = performance.now(), chipText = '', chipAt = 0;
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  update(dt, now / 1000, now);
+  draw(now / 1000, now);
+  if (now - chipAt > 400) { chipAt = now; updateChip(now); }
+  requestAnimationFrame(frame);
+}
+
+function updateChip(now) {
+  let text = '';
+  if (state.running && state.camOn) {
+    if (handsFailed) text = '손 인식을 불러오지 못했어요. 터치로 놀 수 있어요';
+    else if (!handsReady) text = '손 인식 준비 중이에요';
+    else if (now - lastHandSeen > 3000) text = '손을 화면에 보여 주세요';
+  }
+  if (text !== chipText) {
+    chipText = text;
+    chip.textContent = text;
+    chip.hidden = !text;
+  }
+}
+
+/* ---------- touch / mouse ---------- */
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('pointerdown', e => {
+  if (!state.running) return;
+  initAudio();
+  tryPop(e.clientX, e.clientY, 10);
+});
+canvas.addEventListener('pointermove', e => {
+  if (!state.running) return;
+  if (e.buttons > 0 || e.pointerType === 'touch') tryPop(e.clientX, e.clientY, 10);
+});
+
+/* ---------- camera + MediaPipe Hands ---------- */
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.crossOrigin = 'anonymous';
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('script load failed'));
+    document.head.appendChild(s);
+  });
+}
+
+async function setupHands() {
+  if (handsModel || handsFailed) return;
+  try {
+    await loadScript(HANDS_BASE + 'hands.js');
+    handsModel = new window.Hands({ locateFile: f => HANDS_BASE + f });
+    handsModel.setOptions({ maxNumHands: 2, modelComplexity: 0, minDetectionConfidence: 0.4, minTrackingConfidence: 0.4 });
+    handsModel.onResults(onResults);
+    await handsModel.initialize();
+    handsReady = true;
+  } catch (e) {
+    console.warn(e);
+    handsFailed = true;
+    handsModel = null;
+    toast('손 인식 파일을 불러오지 못했어요. 인터넷 연결을 확인해 주세요. 터치로는 계속 놀 수 있어요.', 6500);
+  }
+}
+
+function onResults(res) {
+  const lm = res.multiHandLandmarks || [];
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return;
+  const s = Math.max(W / vw, H / vh);
+  const ox = (W - vw * s) / 2, oy = (H - vh * s) / 2;
+  hands = lm.map(h => h.map(p => {
+    let x = ox + p.x * vw * s;
+    const y = oy + p.y * vh * s;
+    if (state.mirror) x = W - x;
+    return { x, y };
+  }));
+  handsStamp = performance.now();
+  if (hands.length) lastHandSeen = handsStamp;
+}
+
+let sending = false;
+function pump(id) {
+  if (id !== pumpId || !state.camOn || !handsModel || !handsReady) return;
+  const again = () => {
+    if (id !== pumpId) return;
+    if ('requestVideoFrameCallback' in video) video.requestVideoFrameCallback(() => pump(id));
+    else requestAnimationFrame(() => pump(id));
+  };
+  if (!sending && video.readyState >= 2) {
+    sending = true;
+    handsModel.send({ image: video }).catch(e => console.warn(e)).then(() => { sending = false; again(); });
+  } else {
+    again();
+  }
+}
+
+async function startCamera() {
+  if (state.camOn) return true;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    toast('이 브라우저에서는 카메라를 쓸 수 없어요. 터치로 놀아 주세요.', 6000);
+    return false;
+  }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 960 }, height: { ideal: 720 } },
+      audio: false
+    });
+  } catch (e) {
+    toast('카메라를 켤 수 없어요. 브라우저의 카메라 허용을 확인해 주세요. 터치로는 놀 수 있어요.', 6500);
+    return false;
+  }
+  video.srcObject = stream;
+  try { await video.play(); } catch (e) { /* autoplay handled by attributes */ }
+  state.camOn = true;
+  syncUI();
+  const id = ++pumpId;
+  setupHands().then(() => pump(id));
+  return true;
+}
+
+function stopCamera() {
+  pumpId++;
+  state.camOn = false;
+  hands = [];
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  video.srcObject = null;
+  syncUI();
+}
+
+/* ---------- screen wake lock ---------- */
+async function keepAwake() {
+  try {
+    if ('wakeLock' in navigator && document.visibilityState === 'visible' && !wakeLock) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    }
+  } catch (e) { wakeLock = null; }
+}
+document.addEventListener('visibilitychange', () => { if (state.running) keepAwake(); });
+
+/* ---------- UI ---------- */
+function syncUI() {
+  document.querySelectorAll('[data-toggle]').forEach(btn => {
+    const on = !!state[btn.dataset.toggle];
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.textContent = on ? '켜짐' : '꺼짐';
+  });
+  $('#countOut').textContent = state.count;
+  $('#camToggle').textContent = state.camOn ? '카메라 끄기' : '카메라 켜기';
+}
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-toggle]');
+  if (!t) return;
+  const k = t.dataset.toggle;
+  state[k] = !state[k];
+  if (k === 'sound' && state.sound) initAudio();
+  syncUI();
+});
+
+function begin(useCam) {
+  initAudio();
+  state.running = true;
+  startEl.hidden = true;
+  gear.hidden = false;
+  keepAwake();
+  if (useCam) startCamera();
+}
+
+$('#goCam').addEventListener('click', () => begin(true));
+$('#goTouch').addEventListener('click', () => begin(false));
+
+function openPanel() { panelEl.hidden = false; syncUI(); $('#closeBtn').focus(); }
+function closePanel() { panelEl.hidden = true; }
+
+let holdTimer = null;
+gear.addEventListener('pointerdown', e => {
+  e.stopPropagation();
+  gear.classList.add('holding');
+  clearTimeout(holdTimer);
+  holdTimer = setTimeout(() => { gear.classList.remove('holding'); openPanel(); }, 700);
+});
+['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => gear.addEventListener(ev, () => {
+  clearTimeout(holdTimer);
+  gear.classList.remove('holding');
+}));
+gear.addEventListener('click', e => { if (e.detail === 0) openPanel(); });
+
+$('#minus').addEventListener('click', () => { state.count = Math.max(3, state.count - 1); syncUI(); });
+$('#plus').addEventListener('click', () => { state.count = Math.min(10, state.count + 1); syncUI(); });
+$('#camToggle').addEventListener('click', () => { if (state.camOn) stopCamera(); else startCamera(); });
+$('#closeBtn').addEventListener('click', closePanel);
+$('#homeBtn').addEventListener('click', () => {
+  closePanel();
+  stopCamera();
+  state.running = false;
+  gear.hidden = true;
+  startEl.hidden = false;
+});
+const fsBtn = $('#fsBtn');
+if (!document.documentElement.requestFullscreen) fsBtn.hidden = true;
+fsBtn.addEventListener('click', () => {
+  try {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen();
+  } catch (e) { /* not supported here */ }
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !panelEl.hidden) closePanel(); });
+
+/* ---------- boot ---------- */
+if (document.fonts && document.fonts.load) document.fonts.load('40px Jua').catch(() => {});
+for (let i = 0; i < state.count; i++) spawn(true);
+syncUI();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
